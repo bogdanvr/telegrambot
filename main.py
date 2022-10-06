@@ -19,6 +19,7 @@ list_mes_id = deque()
 bot = telebot.TeleBot('1592543804:AAEUjCrnijrDmGSU0cFvIFKDYNbcfyP9JGM')
 # bot = telebot.TeleBot('5261851830:AAF9v6oBcTddOORqAtMFMFKbVJaOy0JUU0Y')
 now = datetime.now()
+admin = None
 executor = None
 claimlist = []
 claimarchivelist = []
@@ -41,6 +42,14 @@ claim_list_button = types.KeyboardButton(text="Список заявок")
 claim_list_button_archive = types.KeyboardButton(text="Архив заявок")
 main_keyboard.add(claim_list_button, claim_list_button_archive)
 
+admin_main_keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
+claim_list_button = types.KeyboardButton(text="Список заявок компании")
+claim_list_button_archive = types.KeyboardButton(text="Архив заявок компании")
+claim_list_button_executor = types.KeyboardButton(text="Список всех сотрудников")
+send_message_all_executor = types.KeyboardButton(text="Написать всем сотрудникам")
+admin_main_keyboard.add(claim_list_button, claim_list_button_archive, claim_list_button_executor,
+                        send_message_all_executor)
+
 
 def claim_detail_keyboard(claimid):
     detail_keyboard = types.InlineKeyboardMarkup()
@@ -59,12 +68,24 @@ def send_image_keyboard(claimid):
     return detail_keyboard
 
 
-class Executor(BaseModel):
+class Admin(BaseModel):
     id: int
     name: str = None
-    profession: str = None
+    username: str = None
+    email: str = None
     phone: int = None
-    url: str = None
+
+
+class Executor(BaseModel):
+    id: int
+    get_requisites: str = None
+    specialization: str = None
+    phone: int = None
+    chat_id: str = None
+
+
+class AdminList(BaseModel):
+    each_admin: list[Admin]
 
 
 class ExecutorList(BaseModel):
@@ -133,6 +154,11 @@ def get_user_and_now():
     return user_now
 
 
+def set_in_admin_chat_id(id, chat_id):
+    res = requests.patch(f'{BASE_PATH}/api/v1/user/{id}/', {'chat_id': chat_id}, headers=headers)
+    print('set_in_admin_chat_id', res.text)
+
+
 def set_in_executor_chat_id(id, chat_id):
     res = requests.patch(f'{BASE_PATH}/api/v1/company/executor/{id}/',
                          {'chat_id': chat_id}, headers=headers)
@@ -141,14 +167,29 @@ def set_in_executor_chat_id(id, chat_id):
     print('set_in_executor_chat_id', res)
 
 
+def get_admin_object(chat_id):
+    res = requests.get(f'{BASE_PATH}/api/v1/user/?chat_id={chat_id}', headers=headers)
+    res_json = json.loads(res.text)[0]
+    admin_object = Admin(id=res_json['id'], name=res_json['get_full_name'], username=res_json['username'],
+                         phone=res_json['phone'], email=res_json['email'])
+    return admin_object
+
+
+def get_admin_list(chat_id):
+    r = requests.get(f'{BASE_PATH}/api/v1/user/', headers=headers)
+    admin_list = AdminList(each_admin=json.load(StringIO(r.text)))
+    for i in admin_list.each_admin:
+        global admin
+        if i.phone != None:
+            if int(i.phone) == int(User.phone):
+                admin = Admin(id=i.id, name=i.name, username=i.username,
+                              phone=i.phone, email=i.email)
+                return admin
+
+
 def get_executor_list(chat_id):
     r = requests.get(f'{BASE_PATH}/api/v1/company/executor/', headers=headers)
-    # print(r)
-
-    # try:
-    # executor_list = json.loads(r.text)
     executor_list = ExecutorList(each_executor=json.load(StringIO(r.text)))
-    print('executor_list', executor_list)
     for i in executor_list.each_executor:
         global executor
         if i.phone != None:
@@ -160,7 +201,8 @@ def get_executor_list(chat_id):
                 # phone = i.get('phone')
                 # url = i.get('url')
                 # print(executor_id, name, profession, phone, url)
-                executor = Executor(id=i.id, name=i.name, profession=i.profession, url=i.url, phone=i.phone)
+                executor = Executor(id=i.id, get_requisites=i.get_requisites, specialization=i.specialization
+                                    , phone=i.phone)
                 set_in_executor_chat_id(executor.id, chat_id)
                 # Executor.name = i.get_requisites
                 # Executor.profession = i.specialization
@@ -258,6 +300,15 @@ def get_claim_detail(claimid):
     return claim_detail
 
 
+def get_claim_list_company_in_json(list_companies):
+    params = {'status': 2, 'status': 1}
+    for i in list_companies:
+        params['company'] = i
+    response = requests.get(BASE_PATH + f'/api/v1/claim/', params=params, headers=headers)
+    claim_list = ClaimList(each_claim=json.load(StringIO(response.text)))
+    return claim_list
+
+
 def get_claim_list_in_json(message, id):
     # claimlist  = []
     response = requests.get(BASE_PATH + f'/api/v1/claim/?executor={id}&status=2&status=1', headers=headers)
@@ -277,6 +328,14 @@ def get_claim_list_in_json(message, id):
     return claim_list
 
 
+def get_claim_list_archve_company(message, list_companies):
+    params = {'status': 3}
+    params['company'] = list_companies
+    response = requests.get(BASE_PATH + f'/api/v1/claim/', params=params, headers=headers)
+    claim_archive_list = ClaimList(each_claim=json.load(StringIO(response.text)))
+    return claim_archive_list
+
+
 def get_claim_list_archive(message, id):
     response = requests.get(BASE_PATH + f'/api/v1/claim/?executor={id}&ordering=internal_id&status=3',
                             headers=headers)
@@ -292,6 +351,29 @@ def get_claim_list_archive(message, id):
     # claimarchivelist.append(claim_archive_data)
     # print( f'claimarchive:: {claimarchivelist}')
     return claim_archive_list
+
+
+def view_executor_in_companies(executors, chat_id):
+    for i in executors.each_executor:
+        if i.chat_id:
+            print('i$', i)
+            executor_list_res = f'<i>ФИО: </i><b>{i.get_requisites}</b>\n<i>Телефон: </i><b>{i.phone}</b>\n' \
+                                f'<i>Специализация: </i><b>{i.specialization}</b>'
+            keyboard = types.InlineKeyboardMarkup()
+            send_message_button = types.InlineKeyboardButton(text="Написать сообщение сотруднику",
+                                                             callback_data=f'send_message_to_executor${i.chat_id}')
+            keyboard.add(send_message_button)
+            mes_list = bot.send_message(chat_id, executor_list_res, reply_markup=keyboard, parse_mode="HTML")
+            list_mes_id.append(mes_list.message_id)
+            mes_id['mes_list_received'] = mes_list
+        else:
+            executor_list_res = f'<i>ФИО: </i><b>{i.get_requisites}</b>\n<i>Телефон: </i><b>{i.phone}</b>\n' \
+                                f'<i>Специализация: </i><b>{i.specialization}</b>'
+            keyboard2 = types.InlineKeyboardMarkup()
+            send_message_button2 = types.InlineKeyboardButton(text="Сотрудник ещё не зарегистрирован",
+                                                              callback_data='executor_not_registered')
+            keyboard2.add(send_message_button2)
+            mes_list = bot.send_message(chat_id, executor_list_res, reply_markup=keyboard2, parse_mode="HTML")
 
 
 def get_claims(claims, chat_id):
@@ -339,7 +421,33 @@ def send_image_result(claimid, file_path):
     return response
 
 
-def get_chat_id_json(chat_id):
+def get_chat_id_json_admin(chat_id, id=None):
+    res = requests.get(f'{BASE_PATH}/api/v1/user/{id}/', headers=headers)
+    res_json = json.loads(res.text)
+    if res_json:
+        list_companies = res_json['companies']
+        return list_companies
+
+
+def get_executor_in_companies(list_companies):
+    params = {}
+    params['company'] = list_companies
+    print(params)
+    res = requests.get(f'{BASE_PATH}/api/v1/company/executor/', params=params, headers=headers)
+    executor_list = ExecutorList(each_executor=json.load(StringIO(res.text)))
+    print('executor_list!', executor_list)
+    return executor_list
+
+
+def get_company_in_admin(admin_id):
+    res = requests.get(f'{BASE_PATH}/api/v1/user/{admin_id}/', headers=headers)
+    res_json = json.loads(res.text)
+    if res_json:
+        companies = res_json['companies']
+        return companies
+
+
+def get_chat_id_json_executor(chat_id):
     res = requests.get(f'{BASE_PATH}/api/v1/company/executor/?chat_id={chat_id}', headers=headers)
     res_json = json.loads(res.text)
     print('chat_id', chat_id)
@@ -349,7 +457,8 @@ def get_chat_id_json(chat_id):
         print('get_chat_id_json res_json', res_json)
         executor = res_json[0]
         executor_class = Executor(id=executor['id'], name=executor['get_requisites'],
-                                  profession=executor['specialization'], url=executor['url'], phone=executor['phone'])
+                                  specialization=executor['specialization'], url=executor['url'],
+                                  phone=executor['phone'], chat_id=executor['chat_id'])
     return executor_class
 
 
@@ -362,7 +471,12 @@ def start_message(message):
     print('CHAT_ID', CHAT_ID)
     mes_to_line = message.message_id
     mes_id['mes_to_line'] = mes_to_line
-    executor_json = get_chat_id_json(CHAT_ID)
+    executor_json = get_chat_id_json_executor(CHAT_ID)
+    # admin_json = get_chat_id_json_admin(CHAT_ID)
+
+    # if admin_json:
+    #     print('Работает если admin_json')
+
     if executor_json:
         print(executor)
         User.phone = executor_json.phone
@@ -372,7 +486,7 @@ def start_message(message):
         keyboard.add(button_line)
         bot.register_next_step_handler(message, get_menu)
         print(f'user = {User}')
-        mes_in_line = bot.send_message(CHAT_ID, text=f"Добрый день, нажмите кнопку выйти на линию.",
+        mes_in_line = bot.send_message(CHAT_ID, text=f"Добрый день, нажмите кнопку выйти на линию!",
                                        reply_markup=keyboard)
         mes_id['mes_in_line'] = mes_in_line.message_id
 
@@ -381,6 +495,7 @@ def start_message(message):
         print('no in user')
         users_id.add(user_id)
         User.users_id = user_id
+        print(User)
         keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=False)
         button_phone = types.KeyboardButton(text="Отправить номер телефона", request_contact=True)
         # button_line = types.KeyboardButton(text='Выйти на линию')
@@ -396,14 +511,29 @@ def start_message(message):
 
 
 @bot.message_handler(commands=['list_claim'])
+def get_admin_menu(message):
+    print('get_admin_menu сработал')
+    keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=False)
+    button_phone = types.KeyboardButton(text="Начать работу", request_contact=True)
+    # button_line = types.KeyboardButton(text='Выйти на линию')
+    keyboard.add(button_phone)
+
+
+@bot.message_handler(commands=['list_claim'])
 def get_menu(message):
-    print('get_menu сработал')
     global executor
     # bot.delete_message(message.chat.id, mes_send_phone.message_id)
     mes_out_in_line = message.message_id
     bot.delete_message(message.chat.id, mes_out_in_line)
+    admin = get_admin_object(message.chat.id)
     executor = get_executor_list(message.chat.id)
     # print(f'executor = {executor}')
+    try:
+        if admin:
+            you_in_line = bot.send_message(message.chat.id, "Вы авторизовались как администратор",
+                                           reply_markup=main_keyboard)
+    except Exception as e:
+        print('error block admin 447')
     try:
         print(User.phone)
         if executor:
@@ -432,14 +562,50 @@ def get_menu(message):
 
 @bot.message_handler(content_types=['text'])
 def send_text(message):
-    print(message.chat.id)
     chat_id = message.chat.id
     try:
         user_id = message.from_user.id
     except:
         print('error get user')
-    if message.text == 'Список заявок':
-        executor_json = get_chat_id_json(message.chat.id)
+    if message.text == 'Список заявок компании':
+        admin_object = get_admin_object(chat_id)
+        print('admin', admin)
+        list_companies = get_chat_id_json_admin(message.chat.id, id=admin_object.id)
+        claims = get_claim_list_company_in_json(list_companies)
+        get_claims(claims, chat_id)
+
+    elif message.text == 'Список всех сотрудников':
+        admin_object = get_admin_object(chat_id)
+        companies_in_admin = get_company_in_admin(admin_object.id)
+        executor_in_companies = get_executor_in_companies(companies_in_admin)
+        view_executor_in_companies(executor_in_companies, chat_id)
+
+    elif message.text == 'Написать всем сотрудникам':
+        list_chat_id = []
+        executor_in_companies = None
+        print('написать всем сотрудникам')
+
+        def send_message_executors(message, list_chat_id=list_chat_id):
+            for i in list_chat_id:
+                bot.send_message(i, f'Вам поступила рассылка от администратора: {message.text}')
+
+        admin_object = get_admin_object(chat_id)
+        companies_in_admin = get_company_in_admin(admin_object.id)
+        executor_in_companies = get_executor_in_companies(companies_in_admin)
+        print('!', executor_in_companies)
+        for i in executor_in_companies.each_executor:
+            if i.chat_id:
+                list_chat_id.append(i.chat_id)
+        create_mesage_to_all_executor = bot.send_message(message.chat.id, f"Напишите сообщение всем сотрудникам",
+                                                         parse_mode='HTML')
+        bot.register_next_step_handler(create_mesage_to_all_executor, send_message_executors)
+
+
+
+
+
+    elif message.text == 'Список заявок':
+        executor_json = get_chat_id_json_executor(message.chat.id)
         del_list_mes_id(chat_id)
         claims = get_claim_list_in_json(message, executor_json.id)
         print('claims', claims)
@@ -454,13 +620,19 @@ def send_text(message):
         # del_list_mes_id()
         # get_claims(claim_id, claims)
     elif message.text == 'Архив заявок':
-        executor_json = get_chat_id_json(chat_id)
+        executor_json = get_chat_id_json_executor(chat_id)
         del_list_mes_id(chat_id)
         bot.delete_message(chat_id, message.message_id)
         claims = get_claim_list_archive(message, executor_json.id)
         get_claims(claims, chat_id)
-
-
+    elif message.text == 'Архив заявок компании':
+        get_admin_object(chat_id)
+        admin_object = get_admin_object(chat_id)
+        list_companies = get_chat_id_json_admin(message.chat.id, id=admin_object.id)
+        del_list_mes_id(chat_id)
+        bot.delete_message(chat_id, message.message_id)
+        claims = get_claim_list_archve_company(message, list_companies)
+        get_claims(claims, chat_id)
     else:
         bot.send_message(chat_id, 'Не понял команду')
 
@@ -471,21 +643,36 @@ def contact_handler(message):
     try:
         phone = message.contact.phone_number.replace('+', '')
         User.phone = phone
-        executor = get_executor_list(CHAT_ID)
-        print('exec', executor.id)
-        set_in_executor_chat_id(executor.id, CHAT_ID)
+        admin = get_admin_list(CHAT_ID)
+        if admin:
+            print('admin', admin)
+            set_in_admin_chat_id(admin.id, CHAT_ID)
+            # bot.register_next_step_handler(message, get_admin_menu)
+            you_in_line = bot.send_message(message.chat.id, "Вы авторизовались как администратор",
+                                           reply_markup=admin_main_keyboard)
+            print('сработал admin 530')
+        else:
+            print('no admin')
+            executor = get_executor_list(CHAT_ID)
+            if executor:
+                set_in_executor_chat_id(executor.id, CHAT_ID)
+                keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=False)
+                button_line = types.KeyboardButton(text='Выйти на линию')
+                keyboard.add(button_line)
+                bot.register_next_step_handler(message, get_menu)
+                print(f'user = {User}')
+                mes_in_line = bot.send_message(chat_id, text=f"Добрый день, нажмите кнопку выйти на линию.",
+                                               reply_markup=keyboard)
+                mes_phone_info = message.message_id
+                mes_id['mes_phone_info'] = mes_phone_info
+                mes_id['mes_in_line'] = mes_in_line.message_id
+            else:
+                bot.send_message(chat_id, text='К сожалению,'
+                                               ' на Ваш номер телефона не зарегистрирована учетная записть,'
+                                               ' обратитесь к администратору или в техническую поддержку.')
         print('user.phone', User.phone)
     except Exception as e:
-        print(e)
-    mes_phone_info = message.message_id
-    mes_id['mes_phone_info'] = mes_phone_info
-    keyboard = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=False)
-    button_line = types.KeyboardButton(text='Выйти на линию')
-    keyboard.add(button_line)
-    bot.register_next_step_handler(message, get_menu)
-    print(f'user = {User}')
-    mes_in_line = bot.send_message(chat_id, text=f"Добрый день, нажмите кнопку выйти на линию.", reply_markup=keyboard)
-    mes_id['mes_in_line'] = mes_in_line.message_id
+        print('error contact handler', e)
     try:
         bot.delete_message(chat_id, mes_id['mes_phone_info'])
         list_mes_id.remove(mes_id['mes_phone_info'])
@@ -534,8 +721,12 @@ def callback_inline(call):
     print('call.data', call.data)
     if '#' in call.data:
         claimid = call.data.split('#')[1]
+    elif '$' in call.data:
+        executor_chat_id = call.data.split('$')[1]
+        claimid = None
     else:
         claimid = None
+        executor_chat_id = None
     detail_keyboard = claim_detail_keyboard(claimid)
     if call.data.split('#')[0] == "take_to_work":
         print('test message', call.message)
@@ -582,11 +773,34 @@ def callback_inline(call):
             list_mes_id.remove(i)
         list_mes_id.appendleft(mes_claim_detail.message_id)
         print('list_mes_id', list_mes_id)
+    elif call.data.split('$')[0] == "send_message_to_executor":
+        print('executor_chat_id', executor_chat_id)
+        if executor_chat_id:
+            def send_message_to_executor(message, executor_chat_id=executor_chat_id):
+                bot.send_message(executor_chat_id,
+                                 f'Вам поступило сообщение от администратора компании: {message.text}')
+
+            create_mesage_to_executor = bot.send_message(call.message.chat.id, f"Напишите сотруднику сообщение",
+                                                         parse_mode='HTML')
+            bot.register_next_step_handler(create_mesage_to_executor, send_message_to_executor)
+
+        else:
+            bot.send_message(call.message.chat.id, 'К сожалению, сотрудник ещё не зарегистрирован в телеграм боте\n'
+                                                   'Пожалуйста, посмотрите инструкцию или обратитесь к менеджеру')
+
+    elif call.data == 'executor_not_registered':
+        text = 'Сотрудник ещё не зарегистрирован в телеграм-боте, ' \
+               'ознакомьтесь с инструкцией по регистрации и отправьте её сотруднику.'
+        bot.send_message(call.message.chat.id, text)
+        document = 'https://backend.upravhouse.ru/media/instruction.pdf'
+        bot.send_document(call.message.chat.id, document)
+
+
     elif call.data.split('#')[0] == "send_comment":
         def set_comment(message, claimid=claimid):
             # comment_text = create_comment_text(claimid, message.text)
             # set_claim_detail(claimid, comment_text)
-            executor_class = get_chat_id_json(message.chat.id)
+            executor_class = get_chat_id_json_executor(message.chat.id)
             print('executor_class', executor_class)
             send_comment(claimid, executor_class.id, message.text)
             bot.send_message(message.chat.id,
@@ -622,7 +836,7 @@ def callback_inline(call):
                 bot.reply_to(message, 'Фото добавлено')
                 # bot.delete_message(CHAT_ID, send_image_text)
                 message_result = 'Фото результата работы'
-                executor = get_chat_id_json(message.chat.id)
+                executor = get_chat_id_json_executor(message.chat.id)
                 send_comment(claimid, executor.id, message_result)
             except Exception as e:
                 bot.reply_to(message, 'Отправка не удалась')
