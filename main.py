@@ -21,6 +21,7 @@ bot = telebot.TeleBot('1592543804:AAEUjCrnijrDmGSU0cFvIFKDYNbcfyP9JGM')
 now = datetime.now()
 admin = None
 executor = None
+executor_list = None
 claimlist = []
 claimarchivelist = []
 headers = {'Authorization': 'Token 	aa8951ceeeb9426593f593c1fba996935bc83d38'}  # prod
@@ -56,7 +57,7 @@ admin_main_keyboard.add(open_claim_list_button, in_work_claim_list_button, claim
 def claim_detail_keyboard(claimid, status=None):
     detail_keyboard = types.InlineKeyboardMarkup()
     # claim_detail_button = types.InlineKeyboardButton(text="Вернуться к списку", callback_data=f"return_to_list")
-    send_comment_button = types.InlineKeyboardButton(text="Комментарий ✉", callback_data=f"send_comment#{claimid}")
+    send_comment_button = types.InlineKeyboardButton(text="Комментарий", callback_data=f"send_comment#{claimid}")
     if status == 'Поступила':
         callback_button = types.InlineKeyboardButton(text="В работу", callback_data=f"take_to_work#{claimid}")
         detail_keyboard.add(callback_button, send_comment_button)
@@ -166,7 +167,7 @@ def del_list_mes_id(chat_id):
     index_to_remove = []
     for i in list_mes_id:
         try:
-            bot.delete_message(CHAT_ID, i)
+            bot.delete_message(chat_id, i)
         except:
             print(f"Can't delete {i}")
             index_to_remove.append(i)
@@ -474,6 +475,7 @@ def get_chat_id_json_admin(chat_id, id=None):
 
 
 def get_executor_in_companies(list_companies):
+    global executor_list
     params = {}
     params['company'] = list_companies
     print(params)
@@ -843,14 +845,25 @@ def callback_inline(call):
         print('list_mes_id', list_mes_id)
     elif call.data.split('$')[0] == "send_message_to_executor":
         print('executor_chat_id', executor_chat_id)
+        del_list_mes_id(call.message.chat.id)
         if executor_chat_id:
-            def send_message_to_executor(message, executor_chat_id=executor_chat_id):
+            create_mesage_to_executor = None
+            def send_message_to_executor(message, executor_chat_id=executor_chat_id, message_to_executor=create_mesage_to_executor):
+                del_list_mes_id(call.message.chat.id)
+                executor = None
                 bot.send_message(executor_chat_id,
                                  f'Вам поступило сообщение от администратора компании: {message.text}')
+                for i in executor_list.each_executor:
+                    if i.chat_id == executor_chat_id:
+                        executor = i.get_requisites
+                bot.send_message(call.message.chat.id, f'Вы написали сообщение сотруднику {executor} - {message.text}')
 
             create_mesage_to_executor = bot.send_message(call.message.chat.id, f"Напишите сотруднику сообщение",
                                                          parse_mode='HTML')
+            list_mes_id.append(create_mesage_to_executor.message_id)
             bot.register_next_step_handler(create_mesage_to_executor, send_message_to_executor)
+
+
 
         else:
             bot.send_message(call.message.chat.id, 'К сожалению, сотрудник ещё не зарегистрирован в телеграм боте\n'
